@@ -3,8 +3,9 @@ name = "asyncified"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "A small library for operating on long lived sync values in an async context"
+repository = "https://github.com/jsdw/asyncified"
+homepage = "https://github.com/jsdw/asyncified"
 
 [dependencies]
 

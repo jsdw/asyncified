@@ -23,3 +23,4 @@ Calling `Asyncified::new()` spawns a new thread for the value to live in. That t
 
 The value passed to `Asyncified::new()` must be `Send + 'static` to be sent to this new thread, but does not need to be `Sync`, as it's only ever accessed on this one thread.
 
+**Warning:** The channel implementations used to send functions and receive results from the sync thread are naive. In quick tests, the time taken to update a value and return it is in the order of a few microseconds, so it's good enough for my needs at the moment, since it's expected to be used with things like database connections which will dwarf this overhead.
