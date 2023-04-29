@@ -3,14 +3,18 @@ mod oneshot;
 
 type Func<T> = Box<dyn FnOnce(&mut T) + Send + 'static>;
 
+/// This struct is designed to take a value whose methods are
+/// blocking and potentially slow, move it onto its own thread,
+/// and provide an async interface to operate on it.
 #[derive(Clone, Debug)]
 pub struct Asyncified<T> {
     tx: channel::Sender<Func<T>>
 }
 
 impl <T: Send + 'static> Asyncified<T> {
-    /// Put the provided value into a new thread. Use [`Asyncified::call`] to
-    /// access said value from an async context.
+    /// This function takes the provided value and moves it into a
+    /// newly spawned thread. Use the [`Asyncified::call()`] method to
+    /// operate on this value in that thread.
     pub fn new(mut val: T) -> Self {
         let (tx, mut rx) = channel::new::<Func<T>>(10);
 
@@ -25,7 +29,9 @@ impl <T: Send + 'static> Asyncified<T> {
         Self { tx }
     }
 
-    /// Access the asyncified value behind an async interface.
+    /// Execute the provided function on the thread that the asyncified
+    /// value was moved onto, handing back the result when done. This will
+    /// not block while the function is running.
     pub async fn call<R: Send + 'static, F: (FnOnce(&mut T) -> R) + Send + 'static>(&self, f: F) -> R {
         let (tx, rx) = oneshot::new::<R>();
 
@@ -78,5 +84,21 @@ mod test {
 
         // the number should have been incremeted 100k times.
         assert_eq!(a.call(|n| *n).await, 100_000);
+    }
+
+    #[tokio::test]
+    async fn is_non_blocking() {
+        let a = Asyncified::new(());
+
+        let start = std::time::Instant::now();
+
+        // The function takes 10s to complete:
+        let _fut = a.call(|_| {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+        });
+
+        // But we just get a future back which doesn't block:
+        let d = std::time::Instant::now().duration_since(start).as_millis();
+        assert!(d < 100);
     }
 }
