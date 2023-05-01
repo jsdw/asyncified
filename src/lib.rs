@@ -6,9 +6,22 @@ type Func<T> = Box<dyn FnOnce(&mut T) + Send + 'static>;
 /// This struct is designed to take a value whose methods are
 /// blocking and potentially slow, move it onto its own thread,
 /// and provide an async interface to operate on it.
-#[derive(Clone, Debug)]
 pub struct Asyncified<T> {
     tx: channel::Sender<Func<T>>
+}
+
+impl <T> Clone for Asyncified<T> {
+    fn clone(&self) -> Self {
+        Self { tx: self.tx.clone() }
+    }
+}
+
+impl <T> std::fmt::Debug for Asyncified<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Asyncified")
+         .field("tx", &"<channel::Sender>")
+         .finish()
+    }
 }
 
 impl <T: Send + 'static> Asyncified<T> {
