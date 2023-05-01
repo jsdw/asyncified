@@ -5,14 +5,12 @@ A small, zero dependency, runtime agnostic Rust library for taking something tha
 ```rust
 use asyncified::Asyncified;
 
-// Assume that this DB connection only exposes blocking functions.
-let db_conn = database::connection();
+// We can construct some blocking thing in a new thread:
+let async_conn = Asyncified::new(|| database::connection());
 
-// We can wrap it in Asyncified:
-let async_conn = Asyncified::new(db_conn);
-
-// And then we can run blocking code and await the result in a
-// non-blocking way from our async context:
+// And then we can run blocking code which is handed a mutable reference
+// to this thing, and await the result in a non-blocking way from our
+// async context:
 let res = async_conn.call(|db_conn| {
     let res = db_conn.execute("SELECT * FROM foo");
     res

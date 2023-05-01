@@ -15,7 +15,7 @@ pub fn new<T>() -> (Sender<T>, Receiver<T>) {
         inner: inner.clone()
     };
     let receiver = Receiver {
-        inner:  inner
+        inner
     };
 
     (sender, receiver)
