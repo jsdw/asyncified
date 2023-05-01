@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- `Asyncified::new()` and `Asyncified::new_using()` now accept a constructor function that returns a `Result`. If the result is an `Err(..)` then we give this back to the caller and do nothing else. The caller can now `.await` this result if they are interested in it, to handle any errors.
+
 ## 0.3.1
 
 - `Clone` and `Debug` impls on `Asyncified<T>` no longer require `T` to impl them.
