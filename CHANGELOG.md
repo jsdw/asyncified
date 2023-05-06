@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+
+- Add `Asyncified::new_ok()` method for when the thing you're constructing doesn't need to potentially return an error.
+- Improve the docs.
+
 ## 0.4.0
 
 - `Asyncified::new()` and `Asyncified::new_using()` now accept a constructor function that returns a `Result`. If the result is an `Err(..)` then we give this back to the caller and do nothing else. The caller can now `.await` this result if they are interested in it, to handle any errors.

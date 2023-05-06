@@ -1,11 +1,45 @@
-mod channel;
+//! # Asyncified
+//!
+//! This small, zero-dependency library provides a wrapper
+//! to hide synchronous, blocking types behind an async
+//! interface that is runtime agnostic.
+//!
+//! # Example
+//!
+//! ```rust
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # struct SlowThing;
+//! # impl SlowThing {
+//! #     fn new() -> SlowThing {
+//! #         std::thread::sleep(std::time::Duration::from_secs(1));
+//! #         SlowThing
+//! #     }
+//! # }
+//! use asyncified::Asyncified;
+//!
+//! // Construct a thing (that could take time) inside
+//! // the Asyncified container, awaiting it to be ready.
+//! // prefer `new()` if you want to be able to return an error.
+//! let s = Asyncified::new_ok(SlowThing::new).await;
+//!
+//! // Perform some potentially slow operation on the thing
+//! // inside the container, awaiting the result.
+//! let n = s.call(|slow_thing| {
+//!     std::thread::sleep(std::time::Duration::from_secs(1));
+//!     123usize
+//! }).await;
+//! # assert_eq!(n, 123);
+//! # Ok(())
+//! # }
+//! ```
+
 mod oneshot;
+mod channel;
 
 type Func<T> = Box<dyn FnOnce(&mut T) + Send + 'static>;
 
-/// This struct is designed to take a value whose methods are
-/// blocking and potentially slow, move it onto its own thread,
-/// and provide an async interface to operate on it.
+/// The whole point.
 pub struct Asyncified<T> {
     tx: channel::Sender<Func<T>>
 }
@@ -25,9 +59,23 @@ impl <T> std::fmt::Debug for Asyncified<T> {
 }
 
 impl <T: Send + 'static> Asyncified<T> {
-    /// This function takes the provided value and moves it into a
-    /// newly spawned thread. Use the [`Asyncified::call()`] method to
-    /// operate on this value in that thread.
+    /// This is a shorthand for [`Asyncified::new`] for when the thing
+    /// you're constructing can't fail.
+    pub async fn new_ok<F>(val_fn: F) -> Self
+    where
+        F: Send + 'static + FnOnce() -> T,
+    {
+        let thread_builder = std::thread::Builder::new()
+            .name("Asyncified thread".to_string());
+
+        Self::new_using(thread_builder, move || Ok::<_,()>(val_fn()))
+            .await
+            .expect("function can#'t fail")
+    }
+
+    /// This is passed a constructor function, and constructs the resulting
+    /// value on a new thread, returning any error in doing so. Use
+    /// [`Asyncified::call()`] to perform operations on the constructed value.
     pub async fn new<E, F>(val_fn: F) -> Result<Self, E>
     where
         E: Send + 'static,
@@ -39,10 +87,12 @@ impl <T: Send + 'static> Asyncified<T> {
         Self::new_using(thread_builder, val_fn).await
     }
 
-    /// This function takes the provided value and moves it into a
-    /// newly spawned thread. In addition, it accepts a builder type
-    /// to configure the thread that the value will be constructed
-    /// into.
+    /// This is passed a constructor function, and constructs the resulting
+    /// value on a new thread, returning any error in doing so. Use
+    /// [`Asyncified::call()`] to perform operations on the constructed value.
+    ///
+    /// It's also passed a thread builder, giving you control over the thread
+    /// that the value is spawned into.
     pub async fn new_using<E, F>(thread_builder: std::thread::Builder, val_fn: F) -> Result<Self, E>
     where
         E: Send + 'static,
@@ -80,8 +130,9 @@ impl <T: Send + 'static> Asyncified<T> {
     }
 
     /// Execute the provided function on the thread that the asyncified
-    /// value was moved onto, handing back the result when done. This will
-    /// not block while the function is running.
+    /// value was moved onto, handing back the result when done. The async
+    /// task that this is called from will be yielded while we're waiting
+    /// for the call to finish.
     pub async fn call<R: Send + 'static, F: (FnOnce(&mut T) -> R) + Send + 'static>(&self, f: F) -> R {
         let (tx, rx) = oneshot::new::<R>();
 
@@ -119,6 +170,22 @@ mod test {
     }
 
     #[tokio::test]
+    async fn call_doesnt_block() {
+        let a = Asyncified::new(|| Ok::<_,()>(())).await.unwrap();
+
+        let start = Instant::now();
+
+        // The function takes 10s to complete:
+        let _fut = a.call(|_| {
+            std::thread::sleep(Duration::from_secs(10));
+        });
+
+        // But we just get a future back which doesn't block:
+        let d = Instant::now().duration_since(start).as_millis();
+        assert!(d < 100);
+    }
+
+    #[tokio::test]
     async fn basic_updating_works() {
         let a = Asyncified::new(|| Ok::<_, ()>(0u64)).await.unwrap();
 
@@ -151,21 +218,5 @@ mod test {
 
         // the number should have been incremeted 100k times.
         assert_eq!(a.call(|n| *n).await, 100_000);
-    }
-
-    #[tokio::test]
-    async fn is_non_blocking() {
-        let a = Asyncified::new(|| Ok::<_,()>(())).await.unwrap();
-
-        let start = Instant::now();
-
-        // The function takes 10s to complete:
-        let _fut = a.call(|_| {
-            std::thread::sleep(Duration::from_secs(10));
-        });
-
-        // But we just get a future back which doesn't block:
-        let d = Instant::now().duration_since(start).as_millis();
-        assert!(d < 100);
     }
 }
