@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- Add `AsyncifiedBuilder` to allow more configuration.
+- Add `on_close` option, to schedule something to run when the container is dropped.
+- Fix bug whereby channel wasn't closing and test that closing works.
+
 ## 0.5.0
 
 - Add `Asyncified::new_ok()` method for when the thing you're constructing doesn't need to potentially return an error.

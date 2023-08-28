@@ -39,6 +39,112 @@ mod channel;
 
 type Func<T> = Box<dyn FnOnce(&mut T) + Send + 'static>;
 
+pub struct AsyncifiedBuilder<T> {
+    channel_size: usize,
+    on_close: Option<Func<T>>,
+    thread_builder: Option<std::thread::Builder>
+}
+
+impl<T: Send + 'static> Default for AsyncifiedBuilder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl <T: Send + 'static> AsyncifiedBuilder<T> {
+    /// Construct a new builder.
+    pub fn new() -> Self {
+        Self {
+            channel_size: 16,
+            on_close: None,
+            thread_builder: None,
+        }
+    }
+
+    /// How many items can be queued at a time to be executed on
+    /// the Asyncified container.
+    pub fn channel_size(mut self, size: usize) -> Self {
+        self.channel_size = size;
+        self
+    }
+
+    /// Configure a single function to run when the [`Asyncified`]
+    /// container is dropped.
+    pub fn on_close<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(&mut T) + Send + 'static
+    {
+        self.on_close = Some(Box::new(f));
+        self
+    }
+
+    /// This is a shorthand for [`AsyncifiedBuilder::build()`] for when the thing
+    /// you're constructing can't fail.
+    pub async fn build_ok<F>(self, val_fn: F) -> Asyncified<T>
+    where
+        F: Send + 'static + FnOnce() -> T,
+    {
+        self.build(move || Ok::<_,()>(val_fn()))
+            .await
+            .expect("function can't fail")
+    }
+
+    /// This is passed a constructor function, and constructs the resulting
+    /// value on a new thread, returning any error in doing so. Use
+    /// [`Asyncified::call()`] to perform operations on the constructed value.
+    ///
+    /// It's also passed a thread builder, giving you control over the thread
+    /// that the value is spawned into.
+    pub async fn build<E, F>(self, val_fn: F) -> Result<Asyncified<T>, E>
+    where
+        E: Send + 'static,
+        F: Send + 'static + FnOnce() -> Result<T,E>,
+    {
+        let thread_builder = self.thread_builder.unwrap_or_else(|| {
+            std::thread::Builder::new()
+                .name("Asyncified thread".to_string())
+        });
+
+        // The default size of the bounded channel, 16, is somewhat
+        // arbitrarily chosen just to help reduce locking on
+        // reads from the channel when there are many writes
+        // (ie it can lock once per 16 reads). `call` will
+        // always wait until a result anyway.
+        let channel_size = self.channel_size;
+
+        let (tx, mut rx) = channel::new::<Func<T>>(channel_size);
+        let (res_tx, res_rx) = oneshot::new::<Result<(), E>>();
+
+        // This runs when the task is going to end (eg no more
+        // open channels).
+        let on_close = self.on_close;
+
+        // As long as there are senders, we'll
+        // receive and run functions in the separate thread.
+        thread_builder.spawn(move || {
+            let mut val = match val_fn() {
+                Ok(val) => {
+                    res_tx.send(Ok(()));
+                    val
+                },
+                Err(e) => {
+                    res_tx.send(Err(e));
+                    return;
+                }
+            };
+            while let Some(f) = rx.recv() {
+                f(&mut val)
+            }
+            if let Some(on_close) = on_close {
+                on_close(&mut val)
+            }
+        }).expect("should be able to spawn new thread for Asyncified instance");
+
+        res_rx.recv().await?;
+        Ok(Asyncified { tx })
+    }
+}
+
 /// The whole point.
 pub struct Asyncified<T> {
     tx: channel::Sender<Func<T>>
@@ -59,74 +165,19 @@ impl <T> std::fmt::Debug for Asyncified<T> {
 }
 
 impl <T: Send + 'static> Asyncified<T> {
-    /// This is a shorthand for [`Asyncified::new`] for when the thing
-    /// you're constructing can't fail.
-    pub async fn new_ok<F>(val_fn: F) -> Self
-    where
-        F: Send + 'static + FnOnce() -> T,
-    {
-        let thread_builder = std::thread::Builder::new()
-            .name("Asyncified thread".to_string());
-
-        Self::new_using(thread_builder, move || Ok::<_,()>(val_fn()))
-            .await
-            .expect("function can#'t fail")
-    }
-
-    /// This is passed a constructor function, and constructs the resulting
-    /// value on a new thread, returning any error in doing so. Use
-    /// [`Asyncified::call()`] to perform operations on the constructed value.
-    pub async fn new<E, F>(val_fn: F) -> Result<Self, E>
+    /// Construct a new [`Asyncified`] container with default values.
+    /// Use [`Asyncified::builder()`] for more options.
+    pub async fn new<E, F>(val_fn: F) -> Result<Asyncified<T>, E>
     where
         E: Send + 'static,
         F: Send + 'static + FnOnce() -> Result<T,E>,
     {
-        let thread_builder = std::thread::Builder::new()
-            .name("Asyncified thread".to_string());
-
-        Self::new_using(thread_builder, val_fn).await
+        Self::builder().build(val_fn).await
     }
 
-    /// This is passed a constructor function, and constructs the resulting
-    /// value on a new thread, returning any error in doing so. Use
-    /// [`Asyncified::call()`] to perform operations on the constructed value.
-    ///
-    /// It's also passed a thread builder, giving you control over the thread
-    /// that the value is spawned into.
-    pub async fn new_using<E, F>(thread_builder: std::thread::Builder, val_fn: F) -> Result<Self, E>
-    where
-        E: Send + 'static,
-        F: Send + 'static + FnOnce() -> Result<T,E>,
-    {
-        // The size of the bounded channel, 16, is somewhat
-        // arbitrarily chosen just to help reduce locking on
-        // reads from the channel when there are many writes
-        // (ie it can lock once per 16 reads). `call` will
-        // always wait until a result anyway.
-        let (tx, mut rx) = channel::new::<Func<T>>(16);
-
-        let (res_tx, res_rx) = oneshot::new::<Result<(), E>>();
-
-        // As long as there are senders, we'll
-        // receive and run functions in the separate thread.
-        thread_builder.spawn(move || {
-            let mut val = match val_fn() {
-                Ok(val) => {
-                    res_tx.send(Ok(()));
-                    val
-                },
-                Err(e) => {
-                    res_tx.send(Err(e));
-                    return;
-                }
-            };
-            while let Some(f) = rx.recv() {
-                f(&mut val)
-            }
-        }).expect("should be able to spawn new thread for Asyncified instance");
-
-        res_rx.recv().await?;
-        Ok(Self { tx })
+    /// Configure a new [`Asyncified`] instance.
+    pub fn builder() -> AsyncifiedBuilder<T> {
+        AsyncifiedBuilder::new()
     }
 
     /// Execute the provided function on the thread that the asyncified
@@ -218,5 +269,24 @@ mod test {
 
         // the number should have been incremeted 100k times.
         assert_eq!(a.call(|n| *n).await, 100_000);
+    }
+
+    #[tokio::test]
+    async fn on_close_is_called() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        let a = Asyncified::builder()
+            .on_close(move |val| {
+                let _ = tx.send(*val);
+            })
+            .build_ok(|| 0u64)
+            .await;
+
+        a.call(|v| *v = 100).await;
+
+        drop(a);
+
+        // The on_close should have set b to the value:
+        assert_eq!(rx.await.unwrap(), 100);
     }
 }

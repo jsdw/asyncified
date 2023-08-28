@@ -118,7 +118,9 @@ impl <T> Drop for Sender<T> {
         if let Some(inner) = self.inner.upgrade() {
             let num_senders = inner.senders.fetch_sub(1, Ordering::Relaxed);
 
-            if num_senders == 0 {
+            // Remember; the _previous_ value was returned, so
+            // inner.senders is now 0.
+            if num_senders == 1 {
                 inner.waiter.notify_one();
             }
         }
