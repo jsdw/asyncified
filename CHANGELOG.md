@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- Add to the builder the ability to configure the thread, too.
+
 ## 0.6.0
 
 - Add `AsyncifiedBuilder` to allow more configuration.

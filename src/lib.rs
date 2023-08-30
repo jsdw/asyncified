@@ -68,6 +68,12 @@ impl <T: Send + 'static> AsyncifiedBuilder<T> {
         self
     }
 
+    /// Configure the thread that the asyncified item will live on.
+    pub fn thread_builder(mut self, builder: std::thread::Builder) -> Self {
+        self.thread_builder = Some(builder);
+        self
+    }
+
     /// Configure a single function to run when the [`Asyncified`]
     /// container is dropped.
     pub fn on_close<F>(mut self, f: F) -> Self
