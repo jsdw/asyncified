@@ -33,6 +33,7 @@
 //! # Ok(())
 //! # }
 //! ```
+#![forbid(unsafe_code)]
 
 mod oneshot;
 mod channel;
@@ -45,13 +46,13 @@ pub struct AsyncifiedBuilder<T> {
     thread_builder: Option<std::thread::Builder>
 }
 
-impl<T: Send + 'static> Default for AsyncifiedBuilder<T> {
+impl<T: 'static> Default for AsyncifiedBuilder<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl <T: Send + 'static> AsyncifiedBuilder<T> {
+impl<T: 'static> AsyncifiedBuilder<T> {
     /// Construct a new builder.
     pub fn new() -> Self {
         Self {
@@ -156,13 +157,13 @@ pub struct Asyncified<T> {
     tx: channel::Sender<Func<T>>
 }
 
-impl <T> Clone for Asyncified<T> {
+impl<T> Clone for Asyncified<T> {
     fn clone(&self) -> Self {
         Self { tx: self.tx.clone() }
     }
 }
 
-impl <T> std::fmt::Debug for Asyncified<T> {
+impl<T> std::fmt::Debug for Asyncified<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Asyncified")
          .field("tx", &"<channel::Sender>")
@@ -170,7 +171,7 @@ impl <T> std::fmt::Debug for Asyncified<T> {
     }
 }
 
-impl <T: Send + 'static> Asyncified<T> {
+impl<T: 'static> Asyncified<T> {
     /// Construct a new [`Asyncified`] container with default values.
     /// Use [`Asyncified::builder()`] for more options.
     pub async fn new<E, F>(val_fn: F) -> Result<Asyncified<T>, E>
