@@ -1,8 +1,8 @@
-use std::sync::{ Arc, Weak, Mutex, Condvar };
-use std::future::{ Future };
-use std::task::{ Waker, Poll };
-use std::collections::{ HashMap, VecDeque };
-use std::sync::atomic::{ Ordering, AtomicU64 };
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::task::{Poll, Waker};
 
 /// Create a naive but fast enough async->sync bounded channel.
 /// - The sender is non-blocking and can operate in an async context.
@@ -15,17 +15,17 @@ pub fn new<T>(size: usize) -> (Sender<T>, Receiver<T>) {
         senders: AtomicU64::new(1),
         locked: Mutex::new(Shared {
             items: Default::default(),
-            wakers: Default::default()
-        })
+            wakers: Default::default(),
+        }),
     });
 
     let sender = Sender {
         id: 0,
-        inner: Arc::downgrade(&inner)
+        inner: Arc::downgrade(&inner),
     };
     let receiver = Receiver {
         inner,
-        items: Default::default()
+        items: Default::default(),
     };
 
     (sender, receiver)
@@ -38,15 +38,15 @@ pub enum SendError<T> {
     ReceiverDropped(T),
     /// If we try polling the `send` future again after
     /// it's completed, we'll get this back.
-    AlreadyReady
+    AlreadyReady,
 }
 
 pub struct Sender<T> {
     id: u64,
-    inner: Weak<Inner<T>>
+    inner: Weak<Inner<T>>,
 }
 
-impl <T: Send + 'static> Sender<T> {
+impl<T: Send + 'static> Sender<T> {
     pub fn send(&self, item: T) -> impl Future<Output = Result<(), SendError<T>>> + 'static {
         let inner = self.inner.clone();
         let id = self.id;
@@ -62,7 +62,7 @@ impl <T: Send + 'static> Sender<T> {
             // contents. If we can't, it means receiver was dropped,
             // so hand back the item as an error.
             let Some(inner) = inner.upgrade() else {
-                return Poll::Ready(Err(SendError::ReceiverDropped(item)))
+                return Poll::Ready(Err(SendError::ReceiverDropped(item)));
             };
 
             let mut locked = inner.locked.lock().unwrap();
@@ -75,7 +75,7 @@ impl <T: Send + 'static> Sender<T> {
                 locked.wakers.insert(id, ctx.waker().clone());
                 drop(locked);
                 maybe_item = Some(item);
-                return Poll::Pending
+                return Poll::Pending;
             }
 
             // Else, push the item. Tell the
@@ -88,7 +88,7 @@ impl <T: Send + 'static> Sender<T> {
     }
 }
 
-impl <T> Clone for Sender<T> {
+impl<T> Clone for Sender<T> {
     fn clone(&self) -> Self {
         let mut id = 0;
 
@@ -100,20 +100,23 @@ impl <T> Clone for Sender<T> {
             inner.senders.fetch_add(1, Ordering::Relaxed);
         }
 
-        Self { id, inner: self.inner.clone() }
+        Self {
+            id,
+            inner: self.inner.clone(),
+        }
     }
 }
 
-impl <T> std::fmt::Debug for Sender<T> {
+impl<T> std::fmt::Debug for Sender<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Sender")
-         .field("id", &self.id)
-         .field("inner", &"<inner>")
-         .finish()
+            .field("id", &self.id)
+            .field("inner", &"<inner>")
+            .finish()
     }
 }
 
-impl <T> Drop for Sender<T> {
+impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.upgrade() {
             let num_senders = inner.senders.fetch_sub(1, Ordering::Relaxed);
@@ -129,10 +132,10 @@ impl <T> Drop for Sender<T> {
 
 pub struct Receiver<T> {
     inner: Arc<Inner<T>>,
-    items: VecDeque<T>
+    items: VecDeque<T>,
 }
 
-impl <T> Receiver<T> {
+impl<T> Receiver<T> {
     pub fn recv(&mut self) -> Option<T> {
         if self.items.is_empty() {
             let mut shared = self.inner.locked.lock().unwrap();
@@ -166,10 +169,10 @@ struct Inner<T> {
     waiter: Condvar,
     next_sender_id: AtomicU64,
     senders: AtomicU64,
-    locked: Mutex<Shared<T>>
+    locked: Mutex<Shared<T>>,
 }
 
 struct Shared<T> {
     wakers: HashMap<u64, Waker>,
-    items: VecDeque<T>
+    items: VecDeque<T>,
 }
