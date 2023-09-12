@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2
+
+- Remove unnecessary Send bounds (thanks, @danielhenrymantilla!)
+- Fix broken doc example.
+- Add CI and fmt the code.
+
 ## 0.6.1
 
 - Add to the builder the ability to configure the thread, too.

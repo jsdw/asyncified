@@ -21,7 +21,7 @@
 //! // Construct a thing (that could take time) inside
 //! // the Asyncified container, awaiting it to be ready.
 //! // prefer `new()` if you want to be able to return an error.
-//! let s = Asyncified::new_ok(SlowThing::new).await;
+//! let s = Asyncified::builder().build_ok(SlowThing::new).await;
 //!
 //! // Perform some potentially slow operation on the thing
 //! // inside the container, awaiting the result.
@@ -33,25 +33,26 @@
 //! # Ok(())
 //! # }
 //! ```
+#![forbid(unsafe_code)]
 
-mod oneshot;
 mod channel;
+mod oneshot;
 
 type Func<T> = Box<dyn FnOnce(&mut T) + Send + 'static>;
 
 pub struct AsyncifiedBuilder<T> {
     channel_size: usize,
     on_close: Option<Func<T>>,
-    thread_builder: Option<std::thread::Builder>
+    thread_builder: Option<std::thread::Builder>,
 }
 
-impl<T: Send + 'static> Default for AsyncifiedBuilder<T> {
+impl<T: 'static> Default for AsyncifiedBuilder<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl <T: Send + 'static> AsyncifiedBuilder<T> {
+impl<T: 'static> AsyncifiedBuilder<T> {
     /// Construct a new builder.
     pub fn new() -> Self {
         Self {
@@ -78,7 +79,7 @@ impl <T: Send + 'static> AsyncifiedBuilder<T> {
     /// container is dropped.
     pub fn on_close<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut T) + Send + 'static
+        F: FnOnce(&mut T) + Send + 'static,
     {
         self.on_close = Some(Box::new(f));
         self
@@ -90,7 +91,7 @@ impl <T: Send + 'static> AsyncifiedBuilder<T> {
     where
         F: Send + 'static + FnOnce() -> T,
     {
-        self.build(move || Ok::<_,()>(val_fn()))
+        self.build(move || Ok::<_, ()>(val_fn()))
             .await
             .expect("function can't fail")
     }
@@ -104,12 +105,11 @@ impl <T: Send + 'static> AsyncifiedBuilder<T> {
     pub async fn build<E, F>(self, val_fn: F) -> Result<Asyncified<T>, E>
     where
         E: Send + 'static,
-        F: Send + 'static + FnOnce() -> Result<T,E>,
+        F: Send + 'static + FnOnce() -> Result<T, E>,
     {
-        let thread_builder = self.thread_builder.unwrap_or_else(|| {
-            std::thread::Builder::new()
-                .name("Asyncified thread".to_string())
-        });
+        let thread_builder = self
+            .thread_builder
+            .unwrap_or_else(|| std::thread::Builder::new().name("Asyncified thread".to_string()));
 
         // The default size of the bounded channel, 16, is somewhat
         // arbitrarily chosen just to help reduce locking on
@@ -127,24 +127,26 @@ impl <T: Send + 'static> AsyncifiedBuilder<T> {
 
         // As long as there are senders, we'll
         // receive and run functions in the separate thread.
-        thread_builder.spawn(move || {
-            let mut val = match val_fn() {
-                Ok(val) => {
-                    res_tx.send(Ok(()));
-                    val
-                },
-                Err(e) => {
-                    res_tx.send(Err(e));
-                    return;
+        thread_builder
+            .spawn(move || {
+                let mut val = match val_fn() {
+                    Ok(val) => {
+                        res_tx.send(Ok(()));
+                        val
+                    }
+                    Err(e) => {
+                        res_tx.send(Err(e));
+                        return;
+                    }
+                };
+                while let Some(f) = rx.recv() {
+                    f(&mut val)
                 }
-            };
-            while let Some(f) = rx.recv() {
-                f(&mut val)
-            }
-            if let Some(on_close) = on_close {
-                on_close(&mut val)
-            }
-        }).expect("should be able to spawn new thread for Asyncified instance");
+                if let Some(on_close) = on_close {
+                    on_close(&mut val)
+                }
+            })
+            .expect("should be able to spawn new thread for Asyncified instance");
 
         res_rx.recv().await?;
         Ok(Asyncified { tx })
@@ -153,30 +155,32 @@ impl <T: Send + 'static> AsyncifiedBuilder<T> {
 
 /// The whole point.
 pub struct Asyncified<T> {
-    tx: channel::Sender<Func<T>>
+    tx: channel::Sender<Func<T>>,
 }
 
-impl <T> Clone for Asyncified<T> {
+impl<T> Clone for Asyncified<T> {
     fn clone(&self) -> Self {
-        Self { tx: self.tx.clone() }
+        Self {
+            tx: self.tx.clone(),
+        }
     }
 }
 
-impl <T> std::fmt::Debug for Asyncified<T> {
+impl<T> std::fmt::Debug for Asyncified<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Asyncified")
-         .field("tx", &"<channel::Sender>")
-         .finish()
+            .field("tx", &"<channel::Sender>")
+            .finish()
     }
 }
 
-impl <T: Send + 'static> Asyncified<T> {
+impl<T: 'static> Asyncified<T> {
     /// Construct a new [`Asyncified`] container with default values.
     /// Use [`Asyncified::builder()`] for more options.
     pub async fn new<E, F>(val_fn: F) -> Result<Asyncified<T>, E>
     where
         E: Send + 'static,
-        F: Send + 'static + FnOnce() -> Result<T,E>,
+        F: Send + 'static + FnOnce() -> Result<T, E>,
     {
         Self::builder().build(val_fn).await
     }
@@ -190,16 +194,22 @@ impl <T: Send + 'static> Asyncified<T> {
     /// value was moved onto, handing back the result when done. The async
     /// task that this is called from will be yielded while we're waiting
     /// for the call to finish.
-    pub async fn call<R: Send + 'static, F: (FnOnce(&mut T) -> R) + Send + 'static>(&self, f: F) -> R {
+    pub async fn call<R: Send + 'static, F: (FnOnce(&mut T) -> R) + Send + 'static>(
+        &self,
+        f: F,
+    ) -> R {
         let (tx, rx) = oneshot::new::<R>();
 
         // Ignore any error, since we expect the thread to last until this
         // struct is dropped, and so sending should never fail.
-        let _ = self.tx.send(Box::new(move |item| {
-            let res = f(item);
-            // Send res back via sync->async oneshot.
-            tx.send(res);
-        })).await;
+        let _ = self
+            .tx
+            .send(Box::new(move |item| {
+                let res = f(item);
+                // Send res back via sync->async oneshot.
+                tx.send(res);
+            }))
+            .await;
 
         rx.recv().await
     }
@@ -208,7 +218,7 @@ impl <T: Send + 'static> Asyncified<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::time::{ Duration, Instant };
+    use std::time::{Duration, Instant};
 
     #[test]
     fn new_doesnt_block() {
@@ -218,7 +228,7 @@ mod test {
         // when the value has been built).
         let _fut = Asyncified::new(|| {
             std::thread::sleep(Duration::from_secs(10));
-            Ok::<_,()>(())
+            Ok::<_, ()>(())
         });
 
         // Should take <100ms to get here, not 10s.
@@ -228,7 +238,7 @@ mod test {
 
     #[tokio::test]
     async fn call_doesnt_block() {
-        let a = Asyncified::new(|| Ok::<_,()>(())).await.unwrap();
+        let a = Asyncified::new(|| Ok::<_, ()>(())).await.unwrap();
 
         let start = Instant::now();
 
@@ -247,7 +257,14 @@ mod test {
         let a = Asyncified::new(|| Ok::<_, ()>(0u64)).await.unwrap();
 
         for i in 1..100_000 {
-            assert_eq!(a.call(|n| { *n += 1; *n }).await, i);
+            assert_eq!(
+                a.call(|n| {
+                    *n += 1;
+                    *n
+                })
+                .await,
+                i
+            );
         }
     }
 
@@ -256,17 +273,23 @@ mod test {
         let a = Asyncified::new(|| Ok::<_, ()>(0u64)).await.unwrap();
 
         // spawn 10 tasks which all increment the number
-        let handles: Vec<_> = (0..10).map({
-            let a = a.clone();
-            move |_| {
+        let handles: Vec<_> = (0..10)
+            .map({
                 let a = a.clone();
-                tokio::spawn(async move {
-                    for _ in 0..10_000 {
-                        a.call(|n| { *n += 1; *n }).await;
-                    }
-                })
-            }
-        }).collect();
+                move |_| {
+                    let a = a.clone();
+                    tokio::spawn(async move {
+                        for _ in 0..10_000 {
+                            a.call(|n| {
+                                *n += 1;
+                                *n
+                            })
+                            .await;
+                        }
+                    })
+                }
+            })
+            .collect();
 
         // wait for them all to finish
         for handle in handles {
