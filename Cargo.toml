@@ -1,11 +1,12 @@
 [package]
 name = "asyncified"
-version = "0.6.2"
-edition = "2021"
+version = "0.7.0"
+edition = "2024"
 license = "MIT"
 description = "A small library for operating on long lived sync values in an async context"
 repository = "https://github.com/jsdw/asyncified"
 homepage = "https://github.com/jsdw/asyncified"
+rust-version = "1.85"
 
 [dependencies]
 

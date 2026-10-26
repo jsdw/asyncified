@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0
+
+- Update to Rust 2024 edition (requires Rust 1.85 or newer).
+
 ## 0.6.2
 
 - Remove unnecessary Send bounds (thanks, @danielhenrymantilla!)

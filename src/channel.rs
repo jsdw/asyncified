@@ -47,7 +47,10 @@ pub struct Sender<T> {
 }
 
 impl<T: Send + 'static> Sender<T> {
-    pub fn send(&self, item: T) -> impl Future<Output = Result<(), SendError<T>>> + 'static {
+    pub fn send(
+        &self,
+        item: T,
+    ) -> impl Future<Output = Result<(), SendError<T>>> + 'static + use<T> {
         let inner = self.inner.clone();
         let id = self.id;
         let mut maybe_item = Some(item);
